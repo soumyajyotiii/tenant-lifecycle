@@ -31,12 +31,29 @@ checker/
 tests/                      unittest suite
 ```
 
+```mermaid
+flowchart LR
+    REQ[requests.jsonl] --> PROV[provision]
+    FLT[faults.jsonl] --> PROV
+    PROV --> WF[workflow]
+    RULES[agent_rules.json] --> AG[agent]
+    AG -- proposal --> POL[policy]
+    POL -- decision stored --> REG[(registry.db)]
+    AG -- approved action --> WF
+    WF -- intent, outcome, audit --> REG
+    WF -- create, delete --> CL[simulated cloud]
+    CL -- resources, cloud log --> INV[(inventory.db)]
+    REG -. read .-> AG
+    REG -. read-only .-> DUMP[dump]
+    INV -. read-only .-> DUMP
+    DUMP --> DJ[dump.jsonl]
+    AG --> REP[agent_report.jsonl]
+    DJ --> CHK[checker]
+    REP --> CHK
 ```
-provision -> workflow -> registry.db (intent, outcome, audit)
-                     \-> cloud -> inventory.db (resources, cloud log)
-agent -> policy (decision stored) -> workflow executors -> cloud
-dump -> both files, read-only        checker -> dump + agent report
-```
+
+The agent never reaches the cloud: it only reads the registry, and approved actions run through the
+workflow. The checker reads only the exported files.
 
 Steps run in order `namespace -> database -> secret -> dns -> app`. A basic tenant gets a
 logical database on `shared-cluster-<region>`; an enterprise tenant gets a dedicated database.
