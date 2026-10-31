@@ -94,12 +94,14 @@ def _evaluate_retry(reg, env, target, inputs):
 
 
 def _evaluate_resume(reg, env, inputs):
+    # Open attempts are allowed: resume reconciles each against the inventory
+    # before any cloud call, exactly as a provision rerun would.
     unresolved = reg.open_attempts(env["env_id"])
     inputs["open_attempts"] = len(unresolved)
-    if env["state"] != models.PROVISIONING:
+    if env["state"] not in (models.PENDING, models.PROVISIONING):
         return False, "env_not_provisioning", inputs
-    if unresolved:
-        return False, "unresolved_attempt", inputs
+    if any(a["op"] != "create" for a in unresolved):
+        return False, "unresolved_delete", inputs
     return True, "resume_allowed", inputs
 
 

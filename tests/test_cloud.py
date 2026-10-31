@@ -6,7 +6,7 @@ from unittest import mock
 
 from tenant_lifecycle import models, writes
 from tenant_lifecycle.cloud import (
-    AlreadyExists, Cloud, CloudTimeout, NotFound, OwnershipMismatch, QuotaExceeded,
+    PROVISION_OPS, AlreadyExists, Cloud, CloudTimeout, NotFound, OwnershipMismatch, QuotaExceeded,
     load_faults, parse_faults,
 )
 
@@ -249,8 +249,17 @@ class StepOperationsTest(CloudTestCase):
         if step == "database":
             self.cloud.create_database(name, env_id, tier, REGION, 1)
         else:
-            getattr(self.cloud, f"create_{step}")(name, env_id, 1)
+            getattr(self.cloud, PROVISION_OPS[step])(name, env_id, 1)
         return name
+
+    def test_provisioning_operation_names(self):
+        self.assertEqual(PROVISION_OPS, {"namespace": "create_namespace",
+                                         "database": "create_database", "secret": "put_secret",
+                                         "dns": "create_dns", "app": "deploy_app"})
+        for name in PROVISION_OPS.values():
+            self.assertTrue(callable(getattr(self.cloud, name)))
+        self.assertFalse(hasattr(self.cloud, "create_secret"))
+        self.assertFalse(hasattr(self.cloud, "create_app"))
 
     def test_each_step_has_a_create_and_delete_operation(self):
         for tier in models.TIERS:

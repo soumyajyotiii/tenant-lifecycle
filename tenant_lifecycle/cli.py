@@ -1,7 +1,7 @@
 """Command line entry point.
 
     python -m tenant_lifecycle [--state-dir DIR] provision requests.jsonl faults.jsonl
-    python -m tenant_lifecycle [--state-dir DIR] agent
+    python -m tenant_lifecycle [--state-dir DIR] agent > agent_report.jsonl
     python -m tenant_lifecycle [--state-dir DIR] dump > dump.jsonl
 """
 
@@ -70,8 +70,10 @@ def _agent(args):
     cloud = Cloud(os.path.join(args.state_dir, INVENTORY_FILE))
     try:
         agent.run(reg, functools.partial(workflow.execute, reg, cloud))
-        _write_jsonl(os.path.join(args.state_dir, AGENT_REPORT_FILE), agent.report(reg))
-        print(json.dumps(reg.state_counts(), sort_keys=True))
+        lines = [json.dumps(r, sort_keys=True) + "\n" for r in agent.report(reg)]
+        _write_lines(os.path.join(args.state_dir, AGENT_REPORT_FILE), lines)
+        sys.stdout.writelines(lines)
+        print(json.dumps(reg.state_counts(), sort_keys=True), file=sys.stderr)
     finally:
         reg.close()
         cloud.close()
@@ -86,8 +88,8 @@ def _dump(args):
     return 0
 
 
-def _write_jsonl(path, records):
+def _write_lines(path, lines):
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        f.writelines(json.dumps(r, sort_keys=True) + "\n" for r in records)
+        f.writelines(lines)
     os.replace(tmp, path)

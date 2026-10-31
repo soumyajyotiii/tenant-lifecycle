@@ -415,7 +415,24 @@ class OperationTrackingTest(RegistryTestCase):
         with self.assertRaises(RegistryConflict):
             self.reg.record_intent(env_id, "namespace", "create", 1, "agent")
         with self.assertRaises(RegistryConflict):
-            self.reg.record_outcome(env_id, "namespace", "create", 1, models.PRESENT, None, "agent")
+            self.reg.record_outcome(env_id, "namespace", "create", 1, models.PRESENT, None, "human")
+
+    def test_agent_may_resolve_an_attempt_a_crashed_provision_left_open(self):
+        env_id = self.provisioning_env()
+        self.reg.record_intent(env_id, "namespace", "create", 1, "workflow")
+        self.assertTrue(self.reg.record_outcome(env_id, "namespace", "create", 1,
+                                                models.PRESENT, None, "agent"))
+        [attempt] = self.reg.attempts(env_id)
+        self.assertEqual(attempt["actor"], "workflow")
+        outcome = [e for e in self.reg.audit_events(env_id) if e["kind"] == "op_outcome"]
+        self.assertEqual([e["actor"] for e in outcome], ["agent"])
+
+    def test_workflow_may_not_resolve_an_agent_attempt(self):
+        env_id = self.provisioning_env()
+        self.reg.record_intent(env_id, "namespace", "create", 1, "agent")
+        with self.assertRaises(RegistryConflict):
+            self.reg.record_outcome(env_id, "namespace", "create", 1, models.PRESENT, None,
+                                    "workflow")
 
 
 class AuditConsistencyTest(RegistryTestCase):

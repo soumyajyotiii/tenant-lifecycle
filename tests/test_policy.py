@@ -98,13 +98,18 @@ class ResumeRuleTest(PolicyTestCase):
         env_id = self.failed("dns", "timeout")
         self.assertEqual(self.check(env_id, "resume", "dns/1"), (False, "env_not_provisioning"))
 
-    def test_resume_is_denied_while_an_attempt_is_unresolved(self):
+    def test_resume_is_allowed_with_an_unresolved_create_and_records_it(self):
         req = request("r1")
         env_id, _ = self.reg.register_request("r1", 1, "acme", "basic", "eu-west-1", req)
         self.reg.transition(env_id, models.PROVISIONING, "workflow")
         self.reg.record_intent(env_id, "namespace", "create", 1, "workflow")
-        self.assertEqual(self.check(env_id, "resume", "namespace/1"),
-                         (False, "unresolved_attempt"))
+        allowed, rule, inputs = policy.evaluate(self.reg, env_id, "resume", "namespace/1")
+        self.assertEqual((allowed, rule, inputs["open_attempts"]), (True, "resume_allowed", 1))
+
+    def test_resume_is_allowed_for_a_pending_environment(self):
+        req = request("r1")
+        env_id, _ = self.reg.register_request("r1", 1, "acme", "basic", "eu-west-1", req)
+        self.assertEqual(self.check(env_id, "resume", "start"), (True, "resume_allowed"))
 
 
 class AllowlistTest(PolicyTestCase):

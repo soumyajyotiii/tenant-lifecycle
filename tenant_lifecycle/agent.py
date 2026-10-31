@@ -22,8 +22,8 @@ def candidates(reg, env):
         step, last = policy.failed_deletion(reg, env_id)
         out = [("cleanup_orphan", f"{step}/{last['attempt'] + 1}")] if step is not None else []
         return out + [("escalate", policy.escalate_target(reg, env_id))]
-    # Only resume environments the agent already owns; provision resumes its own.
-    if state == models.PROVISIONING and reg.has_decisions(env_id):
+    # Includes environments a crashed provision left behind, open attempts and all.
+    if state in (models.PENDING, models.PROVISIONING):
         return [("resume", _resume_target(reg, env_id))]
     return []
 

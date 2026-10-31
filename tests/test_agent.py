@@ -125,6 +125,21 @@ class RetryAndResumeTest(AgentTestCase):
                           ("escalate", "dns/create/1", True, "escalate_allowed")])
         self.assertEqual(self.cloud.get(name)["owner_env_id"], models.env_id_for("other"))
 
+    def test_resume_of_a_crashed_provision_checks_the_inventory_before_calling(self):
+        req = request("r1")
+        env_id, _ = self.reg.register_request("r1", 1, "acme", "basic", "eu-west-1", req)
+        self.reg.transition(env_id, models.PROVISIONING, "workflow")
+        self.reg.record_intent(env_id, "namespace", "create", 1, "workflow")
+        name = models.resource_name(env_id, "namespace")
+        self.cloud.create_namespace(name, env_id, 1)  # the call landed; the crash came first
+
+        with mock.patch.object(self.cloud, "create", wraps=self.cloud.create) as spy:
+            self.run_agent()
+        self.assertNotIn(name, [c.args[0] for c in spy.call_args_list])
+        self.assertEqual(self.attempts("r1", "namespace"), [(1, "workflow", "present", None)])
+        self.assertEqual(self.state("r1"), models.ACTIVE)
+        self.assertEqual(self.decisions("r1"), [("resume", "namespace/1", True, "resume_allowed")])
+
     def test_active_environments_are_left_alone(self):
         self.provision([request("r1")])
         self.assertEqual(self.run_agent(), [])

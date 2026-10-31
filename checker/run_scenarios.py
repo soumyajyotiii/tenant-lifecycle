@@ -169,6 +169,21 @@ def verify(requests, faults, workdir, crash_samples, seed, time_limit):
             window_hit = provision_crash(n, only_if_in_window=True)
     note("cloud_commit_window_exercised", window_hit)
 
+    # The agent, not a provision rerun, picks up a crash that left an attempt open.
+    # Different commands run, so the result is judged by the checker, not by bytes.
+    window_points = [p["crash_after"] for p in results["crash_points"] if p["cloud_window"]]
+    s = new_state("agent-recovers-provision")
+    s.provision(crash_after=window_points[0], expect=CRASH_EXIT_CODE)
+    s.agent()
+    s.provision()
+    s.agent()
+    recovered_dump = s.dump()
+    states = {r["state"] for r in _rows(recovered_dump) if r["table"] == "environments"}
+    note("agent_recovery_reaches_final_states", states <= {"active", "escalated", "cleaned_up"},
+         str(sorted(states)))
+    independent_check(s, recovered_dump)
+    shutil.rmtree(s.path)
+
     probe = new_state("agent-boundary-past")
     shutil.copytree(only.path, probe.path)
     probe.agent(crash_after=agent_writes + 1)

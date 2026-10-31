@@ -241,7 +241,10 @@ def _check_audit(f, d):
                 if (o[0]["details"].get("outcome"), o[0]["details"].get("error_class")) != \
                         (a["outcome"], a["error_class"]):
                     f.add("A3_outcome_disagrees", f"{env['request_id']} {ref}")
-                if {i[0]["actor"], o[0]["actor"]} != {a["actor"]}:
+                # Only the agent may close an attempt someone else opened: a
+                # provision attempt left open by a crash. P2 checks it was approved.
+                if i[0]["actor"] != a["actor"] or o[0]["actor"] not in (
+                        {a["actor"], "agent"} if a["actor"] == "workflow" else {a["actor"]}):
                     f.add("A3_actor_disagrees", f"{env['request_id']} {ref}")
         _check_state_history(f, env, events, intents, outcomes)
         _check_budgets(f, env, attempts.values())
@@ -359,7 +362,9 @@ def _judge(h, action, target):
                 and n.isdigit() and int(n) == last[0] + 1 <= MAX_CREATE_ATTEMPTS
                 and last[1] == "absent" and last[2] in RETRYABLE_ERRORS)
     if action == "resume":
-        return h.state == "provisioning" and not h.open
+        # Unresolved creates are allowed: resume must reconcile them first.
+        return (h.state in ("pending", "provisioning")
+                and all(ref.split("/")[1] == "create" for ref in h.open))
     if action == "cleanup_orphan":
         step, _, n = target.partition("/")
         last = h.last.get((step, "delete"))

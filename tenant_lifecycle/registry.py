@@ -247,7 +247,8 @@ class Registry:
         row = self._get_attempt(env_id, step, op, attempt)
         if row is None:
             raise RegistryConflict(f"no intent for {_ref(step, op, attempt)}")
-        if row["actor"] != actor:
+        # The agent may resolve an attempt that a crashed provision left open.
+        if row["actor"] != actor and not (actor == "agent" and row["actor"] == "workflow"):
             raise RegistryConflict(f"{_ref(step, op, attempt)} belongs to {row['actor']}")
         if row["outcome"] is not None:
             if (row["outcome"], row["error_class"]) == (outcome, error_class):
@@ -381,6 +382,9 @@ class Registry:
         return dict(self.conn.execute(
             "SELECT state, COUNT(*) FROM environments GROUP BY state ORDER BY state"
         ).fetchall())
+
+    def attempt(self, env_id, step, op, attempt):
+        return self._get_attempt(env_id, step, op, attempt)
 
     def open_attempts(self, env_id):
         return self.conn.execute(

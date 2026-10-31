@@ -105,8 +105,11 @@ class AgentCommandTest(AgentCliTestCase):
         state = self.provisioned("a")
         result = self.agent(state)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {"active": 2, "escalated": 2})
-        rows = [json.loads(line) for line in self.report(state).splitlines()]
+        self.assertEqual(result.stdout, self.report(state))
+        self.assertEqual(json.loads(result.stderr), {"active": 2, "escalated": 2})
+        rows = [json.loads(line) for line in result.stdout.splitlines()]
+        for r in rows:
+            self.assertTrue({"action", "evidence", "executed", "outcome"} <= set(r))
         self.assertEqual([(r["request_id"], r["action"], r["target"], r["rule"]) for r in rows],
                          [("r1", "retry_step", "secret/2", "retry_allowed"),
                           ("r1", "resume", "secret/2", "resume_allowed"),

@@ -43,6 +43,11 @@ FAULT_KINDS = (TIMEOUT, TIMEOUT_AFTER_SUCCESS, QUOTA, DUPLICATE)
 CREATE_ONLY_FAULTS = frozenset({QUOTA})
 
 
+# The cloud operation that provisions each step.
+PROVISION_OPS = {"namespace": "create_namespace", "database": "create_database",
+                 "secret": "put_secret", "dns": "create_dns", "app": "deploy_app"}
+
+
 class CloudError(Exception):
     error_class = "cloud_error"
 
@@ -191,13 +196,13 @@ class Cloud:
         self.create(name, models.resource_kind("database", tier), owner_env_id, "database",
                     models.resource_parent("database", tier, region), attempt)
 
-    def create_secret(self, name, owner_env_id, attempt):
+    def put_secret(self, name, owner_env_id, attempt):
         self.create(name, "secret", owner_env_id, "secret", None, attempt)
 
     def create_dns(self, name, owner_env_id, attempt):
         self.create(name, "dns", owner_env_id, "dns", None, attempt)
 
-    def create_app(self, name, owner_env_id, attempt):
+    def deploy_app(self, name, owner_env_id, attempt):
         self.create(name, "app", owner_env_id, "app", None, attempt)
 
     def delete_namespace(self, name, owner_env_id, attempt):

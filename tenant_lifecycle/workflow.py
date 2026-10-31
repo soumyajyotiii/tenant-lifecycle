@@ -9,7 +9,7 @@ execute(), so the agent itself never touches the cloud.
 import json
 
 from tenant_lifecycle import models
-from tenant_lifecycle.cloud import CloudError
+from tenant_lifecycle.cloud import PROVISION_OPS, CloudError
 
 ACTOR = "workflow"
 AGENT = "agent"
@@ -203,7 +203,9 @@ def run_create(reg, cloud, env, step, attempt, actor=ACTOR):
     name = models.resource_name(env_id, step)
     expected = _expected(env, step)
 
-    reg.record_intent(env_id, step, "create", attempt, actor)
+    # An intent left by a crashed run is already durable; the agent reconciles it as is.
+    if reg.attempt(env_id, step, "create", attempt) is None:
+        reg.record_intent(env_id, step, "create", attempt, actor)
     error = None
     # After a crash the earlier call may already have succeeded, so look first.
     if cloud.observe(*expected) == models.ABSENT:
@@ -222,7 +224,7 @@ def _call_create(cloud, env, step, name, attempt):
     if step == "database":
         cloud.create_database(name, env["env_id"], env["tier"], env["region"], attempt)
     else:
-        getattr(cloud, f"create_{step}")(name, env["env_id"], attempt)
+        getattr(cloud, PROVISION_OPS[step])(name, env["env_id"], attempt)
 
 
 def _expected(env, step):
