@@ -48,7 +48,24 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS audit_once ON audit (env_id, kind, ref)
-    WHERE kind IN ('request_registered', 'duplicate_ignored', 'op_intent', 'op_outcome');
+    WHERE kind IN ('request_registered', 'duplicate_ignored', 'op_intent', 'op_outcome',
+                   'policy_decision', 'action_completed');
+
+CREATE TABLE IF NOT EXISTS policy_decisions (
+    decision_id TEXT PRIMARY KEY,
+    env_id      TEXT NOT NULL REFERENCES environments(env_id),
+    action      TEXT NOT NULL,
+    target      TEXT NOT NULL,
+    allowed     INTEGER NOT NULL CHECK (allowed IN (0, 1)),
+    rule        TEXT NOT NULL,
+    inputs      TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS decisions_no_update BEFORE UPDATE ON policy_decisions
+BEGIN SELECT RAISE(ABORT, 'policy decisions are immutable'); END;
+
+CREATE TRIGGER IF NOT EXISTS decisions_no_delete BEFORE DELETE ON policy_decisions
+BEGIN SELECT RAISE(ABORT, 'policy decisions are immutable'); END;
 
 CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit
 BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
@@ -252,12 +269,80 @@ class Registry:
                          "outcome": outcome, "error_class": error_class})
         return True
 
+    # Policy decisions and agent actions
+
+    def record_decision(self, decision_id, env_id, action, target, allowed, rule, inputs,
+                        actor="agent"):
+        """Store a policy decision durably. The first decision for an id stands."""
+        _check_actor(actor)
+        existing = self.get_decision(decision_id)
+        if existing is not None:
+            return existing
+        self._require_environment(env_id)
+        with self._tx():
+            self.conn.execute(
+                "INSERT INTO policy_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (decision_id, env_id, action, target, int(allowed), rule,
+                 json.dumps(inputs, sort_keys=True)),
+            )
+            self._audit(env_id, actor, "policy_decision", decision_id,
+                        {"action": action, "target": target, "allowed": bool(allowed),
+                         "rule": rule})
+        return self.get_decision(decision_id)
+
+    def complete_action(self, decision_id, actor="agent"):
+        """Mark an approved action as finished. Returns False if already marked."""
+        _check_actor(actor)
+        decision = self.get_decision(decision_id)
+        if decision is None or not decision["allowed"]:
+            raise RegistryConflict(f"{decision_id} has no approval")
+        if self._has_audit(decision["env_id"], "action_completed", decision_id):
+            return False
+        with self._tx():
+            self._audit(decision["env_id"], actor, "action_completed", decision_id,
+                        {"action": decision["action"], "target": decision["target"]})
+        return True
+
+    def get_decision(self, decision_id):
+        return self.conn.execute(
+            "SELECT * FROM policy_decisions WHERE decision_id = ?", (decision_id,)
+        ).fetchone()
+
+    def is_completed(self, decision_id):
+        decision = self.get_decision(decision_id)
+        return decision is not None and self._has_audit(
+            decision["env_id"], "action_completed", decision_id)
+
+    def has_decisions(self, env_id):
+        return self.conn.execute(
+            "SELECT 1 FROM policy_decisions WHERE env_id = ?", (env_id,)
+        ).fetchone() is not None
+
+    def decisions(self):
+        """Every decision in the order it was made, with whether it finished."""
+        return self.conn.execute(
+            "SELECT d.*, e.request_id, a.seq AS audit_seq,"
+            "  EXISTS (SELECT 1 FROM audit c WHERE c.env_id = d.env_id"
+            "          AND c.kind = 'action_completed' AND c.ref = d.decision_id) AS completed"
+            " FROM policy_decisions d"
+            " JOIN environments e ON e.env_id = d.env_id"
+            " JOIN audit a ON a.env_id = d.env_id AND a.kind = 'policy_decision'"
+            "  AND a.ref = d.decision_id"
+            " ORDER BY e.source_line, a.seq"
+        ).fetchall()
+
+    def pending_actions(self):
+        return [d for d in self.decisions() if d["allowed"] and not d["completed"]]
+
     # Reads
 
     def get_environment(self, env_id):
         return self.conn.execute(
             "SELECT * FROM environments WHERE env_id = ?", (env_id,)
         ).fetchone()
+
+    def environments(self):
+        return self.conn.execute("SELECT * FROM environments ORDER BY source_line").fetchall()
 
     def state_counts(self):
         return dict(self.conn.execute(

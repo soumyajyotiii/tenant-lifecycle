@@ -57,7 +57,7 @@ class CliTestCase(unittest.TestCase):
     def snapshot(self, state_dir):
         out = {}
         for db, tables in (("registry.db", ("environments", "step_attempts", "resources", "audit")),
-                           ("inventory.db", ("inventory", "cloud_log"))):
+                           ("inventory.db", ("inventory", "cloud_log", "fault_plan"))):
             conn = sqlite3.connect(os.path.join(state_dir, db))
             for t in tables:
                 out[t] = conn.execute(f"SELECT * FROM {t} ORDER BY 1, 2").fetchall()
@@ -66,8 +66,9 @@ class CliTestCase(unittest.TestCase):
 
 
 def committed_writes(snap):
-    # Each registry commit writes one audit row; each cloud commit writes one log row.
-    return len(snap["audit"]) + len(snap["cloud_log"])
+    # Each registry commit writes one audit row; each cloud commit writes one log
+    # row, except storing the fault plan, which is one more commit.
+    return len(snap["audit"]) + len(snap["cloud_log"]) + len(snap["fault_plan"])
 
 
 class ProvisionCommandTest(CliTestCase):

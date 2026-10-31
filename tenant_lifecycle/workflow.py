@@ -2,7 +2,8 @@
 
 The workflow makes one attempt per step. It never retries a failed step and
 never deletes. A step that does not end PRESENT stops the environment in
-step_failed, for the agent to handle.
+step_failed, for the agent to handle. Approved agent actions run through
+execute(), so the agent itself never touches the cloud.
 """
 
 import json
@@ -11,6 +12,7 @@ from tenant_lifecycle import models
 from tenant_lifecycle.cloud import CloudError
 
 ACTOR = "workflow"
+AGENT = "agent"
 REQUIRED_FIELDS = ("request_id", "tenant", "tier", "region")
 
 
@@ -46,15 +48,16 @@ def provision(reg, cloud, requests):
         env_id, status = reg.register_request(
             payload["request_id"], line_no, payload["tenant"], payload["tier"],
             payload["region"], payload, ACTOR)
-        if status != "duplicate":
+        # Once the agent has acted on an environment, only the agent moves it on.
+        if status != "duplicate" and not reg.has_decisions(env_id):
             advance(reg, cloud, env_id)
 
 
-def advance(reg, cloud, env_id):
+def advance(reg, cloud, env_id, actor=ACTOR):
     """Move one environment forward. Safe to call again after a crash."""
     env = reg.get_environment(env_id)
     if env["state"] == models.PENDING:
-        reg.transition(env_id, models.PROVISIONING, ACTOR)
+        reg.transition(env_id, models.PROVISIONING, actor)
     elif env["state"] != models.PROVISIONING:
         return
 
@@ -64,25 +67,57 @@ def advance(reg, cloud, env_id):
             continue
         if last is None or last["outcome"] is None:
             attempt = reg.next_attempt(env_id, step, "create") if last is None else last["attempt"]
-            outcome, error = run_create(reg, cloud, env, step, attempt)
+            outcome, error = run_create(reg, cloud, env, step, attempt, actor)
         else:
             # The outcome was recorded but the crash came before step_failed.
             outcome, error = last["outcome"], last["error_class"]
         if outcome != models.PRESENT:
-            reg.transition(env_id, models.STEP_FAILED, ACTOR,
+            reg.transition(env_id, models.STEP_FAILED, actor,
                            reason=_failure_reason(step, outcome, error))
             return
-    reg.transition(env_id, models.ACTIVE, ACTOR)
+    reg.transition(env_id, models.ACTIVE, actor)
 
 
-def run_create(reg, cloud, env, step, attempt):
+def execute(reg, cloud, decision_id):
+    """Run one approved agent action. Safe to call again after a crash."""
+    decision = reg.get_decision(decision_id)
+    if decision is None or not decision["allowed"]:
+        raise PermissionError(f"{decision_id} is not approved")
+    if decision["action"] == "retry_step":
+        _retry_step(reg, cloud, decision)
+    elif decision["action"] == "resume":
+        advance(reg, cloud, decision["env_id"], AGENT)
+    else:
+        raise PermissionError(f"{decision['action']} has no executor")
+    reg.complete_action(decision_id)
+
+
+def _retry_step(reg, cloud, decision):
+    env_id = decision["env_id"]
+    step, _, attempt = decision["target"].partition("/")
+    attempt = int(attempt)
+    row = next((a for a in reg.attempts(env_id)
+                if (a["step"], a["op"], a["attempt"]) == (step, "create", attempt)), None)
+    if row is None or row["outcome"] is None:
+        if reg.get_environment(env_id)["state"] == models.STEP_FAILED:
+            reg.transition(env_id, models.PROVISIONING, AGENT,
+                           reason=f"retry_step {step}/{attempt}")
+        outcome, error = run_create(reg, cloud, reg.get_environment(env_id), step, attempt, AGENT)
+    else:
+        outcome, error = row["outcome"], row["error_class"]
+    if outcome != models.PRESENT and reg.get_environment(env_id)["state"] == models.PROVISIONING:
+        reg.transition(env_id, models.STEP_FAILED, AGENT,
+                       reason=_failure_reason(step, outcome, error))
+
+
+def run_create(reg, cloud, env, step, attempt, actor=ACTOR):
     """Record intent, call the cloud only if nothing is there, record what the inventory shows."""
     env_id = env["env_id"]
     name = models.resource_name(env_id, step)
     expected = (name, env_id, step, models.resource_kind(step, env["tier"]),
                 models.resource_parent(step, env["tier"], env["region"]))
 
-    reg.record_intent(env_id, step, "create", attempt, ACTOR)
+    reg.record_intent(env_id, step, "create", attempt, actor)
     error = None
     # After a crash the earlier call may already have succeeded, so look first.
     if cloud.observe(*expected) == models.ABSENT:
@@ -93,7 +128,7 @@ def run_create(reg, cloud, env, step, attempt):
     outcome = cloud.observe(*expected)
     if outcome != models.ABSENT:
         error = None
-    reg.record_outcome(env_id, step, "create", attempt, outcome, error, ACTOR)
+    reg.record_outcome(env_id, step, "create", attempt, outcome, error, actor)
     return outcome, error
 
 

@@ -2,7 +2,8 @@
 
 Faults are a pure function of (env_id, step, op, attempt). The cloud keeps no
 record of which faults fired, so resending the same attempt after a crash hits
-the same fault again.
+the same fault again. The plan is stored once in the inventory file, so the
+agent sees the same faults as provision and a different plan is rejected.
 """
 
 import json
@@ -26,6 +27,11 @@ CREATE TABLE IF NOT EXISTS cloud_log (
     kind         TEXT NOT NULL,
     owner_env_id TEXT NOT NULL,
     response     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fault_plan (
+    id   INTEGER PRIMARY KEY CHECK (id = 1),
+    plan TEXT NOT NULL
 );
 """
 
@@ -61,6 +67,10 @@ class OwnershipMismatch(CloudError):
     error_class = "ownership_mismatch"
 
 
+class FaultPlanMismatch(ValueError):
+    pass
+
+
 def parse_faults(records):
     """Turn faults.jsonl records into {(env_id, step, op, attempt): kind}."""
     plan = {}
@@ -90,15 +100,42 @@ def load_faults(path):
         return parse_faults(json.loads(line) for line in f if line.strip())
 
 
+def _encode_plan(plan):
+    return json.dumps(sorted([*key, kind] for key, kind in plan.items()))
+
+
+def _decode_plan(text):
+    return {(env_id, step, op, attempt): kind
+            for env_id, step, op, attempt, kind in json.loads(text)}
+
+
 class Cloud:
     def __init__(self, path, faults=None):
+        """Use `faults` if given; otherwise the plan stored in the file, if any."""
         self.conn = sqlite3.connect(path, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
-        self.faults = dict(faults or {})
+        if faults is None:
+            stored = self._stored_plan()
+            faults = _decode_plan(stored) if stored is not None else {}
+        self.faults = dict(faults)
 
     def close(self):
         self.conn.close()
+
+    def install_faults(self, plan):
+        """Store the plan on first use. Later runs must pass the same plan."""
+        encoded, stored = _encode_plan(plan), self._stored_plan()
+        if stored is None:
+            with writes.transaction(self.conn):
+                self.conn.execute("INSERT INTO fault_plan (id, plan) VALUES (1, ?)", (encoded,))
+        elif stored != encoded:
+            raise FaultPlanMismatch("faults differ from the plan stored in the inventory")
+        self.faults = dict(plan)
+
+    def _stored_plan(self):
+        row = self.conn.execute("SELECT plan FROM fault_plan WHERE id = 1").fetchone()
+        return row["plan"] if row else None
 
     def create(self, name, kind, owner_env_id, owner_step, parent, attempt):
         if kind not in models.RESOURCE_KINDS:
