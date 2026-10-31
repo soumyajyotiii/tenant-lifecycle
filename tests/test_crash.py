@@ -41,14 +41,15 @@ if reg.get_environment(env_id)["state"] == models.PROVISIONING:
         if not reg.open_attempts(env_id):
             continue
         name = models.resource_name(env_id, step)
+        kind = models.resource_kind(step, "basic")
+        parent = models.resource_parent(step, "basic", "eu-west-1")
         error = None
-        if cloud.observe(name, env_id) == models.ABSENT:
+        if cloud.observe(name, env_id, step, kind, parent) == models.ABSENT:
             try:
-                cloud.create(name, models.resource_kind(step, "basic"), env_id, step,
-                             models.resource_parent(step, "basic", "eu-west-1"), 1)
+                cloud.create(name, kind, env_id, step, parent, 1)
             except CloudError as e:
                 error = e.error_class
-        outcome = cloud.observe(name, env_id)
+        outcome = cloud.observe(name, env_id, step, kind, parent)
         reg.record_outcome(env_id, step, "create", 1, outcome,
                            error if outcome == models.ABSENT else None, "workflow")
     reg.transition(env_id, models.STEP_FAILED, "workflow", reason="quota")

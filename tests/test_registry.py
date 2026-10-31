@@ -356,6 +356,18 @@ class OperationTrackingTest(RegistryTestCase):
             self.reg.record_outcome(env_id, "namespace", "create", 1, models.ABSENT, None,
                                     "workflow")
 
+    def test_mismatch_outcome_is_recorded_without_error_class(self):
+        env_id = self.provisioning_env()
+        self.reg.record_intent(env_id, "database", "create", 1, "workflow")
+        with self.assertRaises(ValueError):
+            self.reg.record_outcome(env_id, "database", "create", 1, models.MISMATCH,
+                                    "already_exists", "workflow")
+        self.reg.record_outcome(env_id, "database", "create", 1, models.MISMATCH, None,
+                                "workflow")
+        [res] = self.reg.resources(env_id)
+        self.assertEqual(res["status"], models.MISMATCH)
+        self.assertEqual(self.reg.open_attempts(env_id), [])
+
     def test_create_only_while_provisioning(self):
         env_id = self.new_env()
         with self.assertRaises(RegistryConflict):

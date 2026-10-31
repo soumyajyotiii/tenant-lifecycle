@@ -145,15 +145,56 @@ class Cloud:
         if fault == TIMEOUT_AFTER_SUCCESS:
             raise CloudTimeout(name)
 
+    # The five provisioning operations and their deletes.
+
+    def create_namespace(self, name, owner_env_id, attempt):
+        self.create(name, "namespace", owner_env_id, "namespace", None, attempt)
+
+    def create_database(self, name, owner_env_id, tier, region, attempt):
+        self.create(name, models.resource_kind("database", tier), owner_env_id, "database",
+                    models.resource_parent("database", tier, region), attempt)
+
+    def create_secret(self, name, owner_env_id, attempt):
+        self.create(name, "secret", owner_env_id, "secret", None, attempt)
+
+    def create_dns(self, name, owner_env_id, attempt):
+        self.create(name, "dns", owner_env_id, "dns", None, attempt)
+
+    def create_app(self, name, owner_env_id, attempt):
+        self.create(name, "app", owner_env_id, "app", None, attempt)
+
+    def delete_namespace(self, name, owner_env_id, attempt):
+        self.delete(name, owner_env_id, "namespace", attempt)
+
+    def delete_database(self, name, owner_env_id, attempt):
+        self.delete(name, owner_env_id, "database", attempt)
+
+    def delete_secret(self, name, owner_env_id, attempt):
+        self.delete(name, owner_env_id, "secret", attempt)
+
+    def delete_dns(self, name, owner_env_id, attempt):
+        self.delete(name, owner_env_id, "dns", attempt)
+
+    def delete_app(self, name, owner_env_id, attempt):
+        self.delete(name, owner_env_id, "app", attempt)
+
     def get(self, name):
         return self.conn.execute("SELECT * FROM inventory WHERE name = ?", (name,)).fetchone()
 
-    def observe(self, name, owner_env_id):
-        """What the inventory shows for this name, from this owner's point of view."""
+    def observe(self, name, owner_env_id, owner_step, kind, parent):
+        """Compare the inventory row for this name with the resource we expect.
+
+        Recovery accepts a resource only when it is PRESENT, meaning owner,
+        step, kind and parent all match.
+        """
         row = self.get(name)
         if row is None:
             return models.ABSENT
-        return models.PRESENT if row["owner_env_id"] == owner_env_id else models.FOREIGN_OWNER
+        if row["owner_env_id"] != owner_env_id:
+            return models.FOREIGN_OWNER
+        if (row["owner_step"], row["kind"], row["parent"]) != (owner_step, kind, parent):
+            return models.MISMATCH
+        return models.PRESENT
 
     def inventory(self):
         return self.conn.execute("SELECT * FROM inventory ORDER BY name").fetchall()

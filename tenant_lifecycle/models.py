@@ -45,7 +45,9 @@ OP_ALLOWED_STATES = {
 PRESENT = "present"
 ABSENT = "absent"
 FOREIGN_OWNER = "foreign_owner"
-OUTCOMES = (PRESENT, ABSENT, FOREIGN_OWNER)
+# Our owner, but not the resource we expected (wrong step, kind or parent).
+MISMATCH = "mismatch"
+OUTCOMES = (PRESENT, ABSENT, FOREIGN_OWNER, MISMATCH)
 
 # The outcome that means "the call changed nothing". Only then is the cloud's
 # error class safe to store: no cloud write happened, so no crash could have
