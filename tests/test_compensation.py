@@ -4,7 +4,7 @@ from unittest import mock
 
 from tenant_lifecycle import agent, models, policy, workflow
 
-from test_agent import AgentTestCase, fault, request
+from test_agent import DIGEST, AgentTestCase, fault, request
 
 
 def delete_fault(request_id, step, kind, attempt=1):
@@ -219,8 +219,8 @@ class CrashMidCompensationTest(CompensationTestCase):
     def test_pending_escalate_resumes_with_open_delete(self):
         self.provision([request("r1")], [fault("r1", "app", "quota")])
         env_id = models.env_id_for("r1")
-        policy.decide(self.reg, env_id, "retry_step", "app/2")
-        decision = policy.decide(self.reg, env_id, "escalate", "app/create/1")
+        policy.decide(self.reg, env_id, "retry_step", "app/2", DIGEST)
+        decision = policy.decide(self.reg, env_id, "escalate", "app/create/1", DIGEST)
         # Simulate a crash after the cloud deleted dns but before the registry heard.
         self.reg.transition(env_id, models.COMPENSATING, "agent", reason="escalate app/create/1")
         self.reg.record_intent(env_id, "dns", "delete", 1, "agent")

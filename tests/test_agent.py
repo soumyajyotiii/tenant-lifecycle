@@ -11,6 +11,9 @@ from tenant_lifecycle.cloud import Cloud, parse_faults
 from tenant_lifecycle.registry import Registry
 
 
+RULES, DIGEST = agent.load_rules()
+
+
 def request(request_id, tier="basic"):
     return {"request_id": request_id, "tenant": "acme", "tier": tier, "region": "eu-west-1"}
 
@@ -45,7 +48,7 @@ class AgentTestCase(unittest.TestCase):
             executed.append((decision_id, bool(decision and decision["allowed"])))
             workflow.execute(self.reg, self.cloud, decision_id)
 
-        agent.run(self.reg, execute)
+        agent.run(self.reg, execute, RULES, DIGEST)
         return executed
 
     def state(self, request_id):
@@ -178,7 +181,7 @@ class AgentBoundaryTest(AgentTestCase):
     def test_executor_that_does_not_complete_stops_the_agent(self):
         self.provision([request("r1")], [fault("r1", "secret", "timeout")])
         with self.assertRaisesRegex(RuntimeError, "did not complete"):
-            agent.run(self.reg, lambda decision_id: None)
+            agent.run(self.reg, lambda decision_id: None, RULES, DIGEST)
 
 
 class AuditOrderingTest(AgentTestCase):
@@ -237,7 +240,7 @@ class AgentReplayTest(AgentTestCase):
         self.cloud.faults = parse_faults([fault("r4", "secret", "timeout")])
         workflow.provision(self.reg, self.cloud, [(4, request("r4"))])
         # Simulate a crash right after the approval was stored.
-        decision = policy.decide(self.reg, env_id, "retry_step", "secret/2")
+        decision = policy.decide(self.reg, env_id, "retry_step", "secret/2", DIGEST)
         executed = self.run_agent()
         self.assertEqual(executed[0], (decision["decision_id"], True))
         self.assertEqual(self.state("r4"), models.ACTIVE)

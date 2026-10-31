@@ -17,13 +17,18 @@ def decision_id(env_id, action, target):
     return f"{env_id}:{action}:{target}"
 
 
-def decide(reg, env_id, action, target):
-    """Evaluate and durably record a decision. Returns the stored decision row."""
+def decide(reg, env_id, action, target, rules_digest):
+    """Evaluate and durably record a decision. Returns the stored decision row.
+
+    `rules_digest` identifies the agent rules that proposed the action. It is
+    kept as evidence only; it never changes the verdict.
+    """
     did = decision_id(env_id, action, target)
     existing = reg.get_decision(did)
     if existing is not None:
         return existing
     allowed, rule, inputs = evaluate(reg, env_id, action, target)
+    inputs["agent_rules_sha256"] = rules_digest
     return reg.record_decision(did, env_id, action, target, allowed, rule, inputs)
 
 

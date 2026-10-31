@@ -1,0 +1,6 @@
+{
+  "pending": ["resume"],
+  "provisioning": ["resume"],
+  "step_failed": ["retry_step", "escalate"],
+  "cleanup_failed": ["cleanup_orphan", "escalate"]
+}

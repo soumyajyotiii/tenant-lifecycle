@@ -3,9 +3,12 @@ import sqlite3
 import tempfile
 import unittest
 
-from tenant_lifecycle import models, policy, workflow, writes
+from tenant_lifecycle import agent, models, policy, workflow, writes
 from tenant_lifecycle.cloud import Cloud, parse_faults
 from tenant_lifecycle.registry import Registry
+
+
+DIGEST = agent.load_rules()[1]
 
 
 def request(request_id, tier="basic"):
@@ -71,7 +74,7 @@ class RetryRuleTest(PolicyTestCase):
         self.provision([request("r1")], faults)
         env_id = models.env_id_for("r1")
         for attempt in (2, 3):
-            decision = policy.decide(self.reg, env_id, "retry_step", f"app/{attempt}")
+            decision = policy.decide(self.reg, env_id, "retry_step", f"app/{attempt}", DIGEST)
             self.assertTrue(decision["allowed"])
             workflow.execute(self.reg, self.cloud, decision["decision_id"])
         self.assertEqual(self.check(env_id, "retry_step", "app/4"),
@@ -137,12 +140,12 @@ class DurableDecisionTest(PolicyTestCase):
 
     def test_decision_is_stored_with_its_inputs_and_audited_once(self):
         env_id = self.failed("database", "quota")
-        decision = policy.decide(self.reg, env_id, "retry_step", "database/2")
+        decision = policy.decide(self.reg, env_id, "retry_step", "database/2", DIGEST)
         self.assertEqual((decision["allowed"], decision["rule"]), (0, "quota_not_retryable"))
         self.assertIn('"error_class": "quota"', decision["inputs"])
 
         before, start = self.snapshot(), writes.committed_count()
-        again = policy.decide(self.reg, env_id, "retry_step", "database/2")
+        again = policy.decide(self.reg, env_id, "retry_step", "database/2", DIGEST)
         self.assertEqual(tuple(again), tuple(decision))
         self.assertEqual((self.snapshot(), writes.committed_count()), (before, start))
         audited = [e for e in self.reg.audit_events(env_id) if e["kind"] == "policy_decision"]
@@ -150,7 +153,7 @@ class DurableDecisionTest(PolicyTestCase):
 
     def test_decisions_are_immutable(self):
         env_id = self.failed("dns", "timeout")
-        decision = policy.decide(self.reg, env_id, "retry_step", "dns/2")
+        decision = policy.decide(self.reg, env_id, "retry_step", "dns/2", DIGEST)
         with self.assertRaises(sqlite3.IntegrityError):
             self.reg.conn.execute("UPDATE policy_decisions SET allowed = 0")
         with self.assertRaises(sqlite3.IntegrityError):
@@ -159,7 +162,7 @@ class DurableDecisionTest(PolicyTestCase):
 
     def test_executor_refuses_denied_or_unknown_decisions(self):
         env_id = self.failed("database", "quota")
-        denied = policy.decide(self.reg, env_id, "retry_step", "database/2")
+        denied = policy.decide(self.reg, env_id, "retry_step", "database/2", DIGEST)
         before = self.snapshot()
         for decision_id in (denied["decision_id"], f"{env_id}:retry_step:database/9"):
             with self.subTest(decision_id=decision_id), self.assertRaises(PermissionError):

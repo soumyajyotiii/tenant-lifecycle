@@ -453,6 +453,10 @@ def _check_approvals(f, d):
             h.apply(e)
         if window is not None:
             f.add("P3_approved_action_unfinished", f"{env['request_id']} {window['id']}")
+    # One run's decisions must all come from one agent rules file.
+    digests = {(x["inputs"] or {}).get("agent_rules_sha256") for x in d["decisions"].values()}
+    if None in digests or len(digests) > 1:
+        f.add("P6_agent_rules_inconsistent", f"{len(digests)} digests: {sorted(map(str, digests))}")
     audited = {e["ref"] for events in d["audit"].values() for e in events
                if e["kind"] == "policy_decision"}
     for decision_id in set(d["decisions"]) - audited:

@@ -63,13 +63,15 @@ def _provision(args):
 
 
 def _agent(args):
+    # Validate the rules before opening any state, so a bad file writes nothing.
+    rules, rules_digest = agent.load_rules()
     registry_path = os.path.join(args.state_dir, REGISTRY_FILE)
     if not os.path.exists(registry_path):
         raise ValueError(f"no registry in {args.state_dir}; run provision first")
     reg = Registry(registry_path)
     cloud = Cloud(os.path.join(args.state_dir, INVENTORY_FILE))
     try:
-        agent.run(reg, functools.partial(workflow.execute, reg, cloud))
+        agent.run(reg, functools.partial(workflow.execute, reg, cloud), rules, rules_digest)
         lines = [json.dumps(r, sort_keys=True) + "\n" for r in agent.report(reg)]
         _write_lines(os.path.join(args.state_dir, AGENT_REPORT_FILE), lines)
         sys.stdout.writelines(lines)
