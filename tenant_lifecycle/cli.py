@@ -2,6 +2,7 @@
 
     python -m tenant_lifecycle [--state-dir DIR] provision requests.jsonl faults.jsonl
     python -m tenant_lifecycle [--state-dir DIR] agent
+    python -m tenant_lifecycle [--state-dir DIR] dump > dump.jsonl
 """
 
 import argparse
@@ -10,7 +11,7 @@ import json
 import os
 import sys
 
-from tenant_lifecycle import agent, workflow, writes
+from tenant_lifecycle import agent, dump, workflow, writes
 from tenant_lifecycle.cloud import Cloud, load_faults
 from tenant_lifecycle.registry import Registry
 
@@ -29,13 +30,16 @@ def main(argv=None):
     provision.add_argument("requests")
     provision.add_argument("faults")
     commands.add_parser("agent", help="resolve failed environments through policy-approved actions")
+    commands.add_parser("dump", help="print registry, inventory and audit as sorted JSONL")
     args = parser.parse_args(argv)
 
     try:
         writes.crash_limit()
         if args.command == "provision":
             return _provision(args)
-        return _agent(args)
+        if args.command == "agent":
+            return _agent(args)
+        return _dump(args)
     except (OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return INPUT_ERROR_EXIT_CODE
@@ -71,6 +75,14 @@ def _agent(args):
     finally:
         reg.close()
         cloud.close()
+    return 0
+
+
+def _dump(args):
+    lines = dump.dump_lines(os.path.join(args.state_dir, REGISTRY_FILE),
+                            os.path.join(args.state_dir, INVENTORY_FILE))
+    for line in lines:
+        sys.stdout.write(line + "\n")
     return 0
 
 
