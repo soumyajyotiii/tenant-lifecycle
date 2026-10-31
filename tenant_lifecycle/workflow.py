@@ -87,9 +87,29 @@ def execute(reg, cloud, decision_id):
         _retry_step(reg, cloud, decision)
     elif decision["action"] == "resume":
         advance(reg, cloud, decision["env_id"], AGENT)
+    elif decision["action"] == "cleanup_orphan":
+        _cleanup_orphan(reg, cloud, decision)
+    elif decision["action"] == "escalate":
+        _escalate(reg, cloud, decision)
     else:
         raise PermissionError(f"{decision['action']} has no executor")
-    reg.complete_action(decision_id)
+    reg.complete_action(decision_id, _action_outcome(reg, cloud, decision_id))
+
+
+def _action_outcome(reg, cloud, decision_id):
+    """What the action actually achieved, read back from durable state only.
+
+    Nothing comes from memory, so a run resumed after a crash reports the same.
+    """
+    env_id = reg.get_decision(decision_id)["env_id"]
+    attempts = []
+    for e in reg.events_after(decision_id):
+        if e["kind"] == "op_outcome":
+            details = json.loads(e["details"])
+            attempts.append({"ref": e["ref"], "outcome": details["outcome"],
+                             "error_class": details["error_class"]})
+    return {"env_state": reg.get_environment(env_id)["state"], "attempts": attempts,
+            "owned_resources": cloud.owned_by(env_id)}
 
 
 def _retry_step(reg, cloud, decision):
@@ -110,12 +130,78 @@ def _retry_step(reg, cloud, decision):
                        reason=_failure_reason(step, outcome, error))
 
 
+def _escalate(reg, cloud, decision):
+    """Compensate in reverse order; escalate only once the env owns nothing in the cloud."""
+    env_id = decision["env_id"]
+    entered = any(e["kind"] == "state_changed"
+                  and json.loads(e["details"])["to"] == models.COMPENSATING
+                  for e in reg.events_after(decision["decision_id"]))
+    if not entered:
+        reg.transition(env_id, models.COMPENSATING, AGENT,
+                       reason=f"escalate {decision['target']}")
+    if reg.get_environment(env_id)["state"] != models.COMPENSATING:
+        return  # this round already finished before a crash
+    _compensate(reg, cloud, reg.get_environment(env_id))
+    remaining = cloud.owned_by(env_id)
+    if remaining:
+        reg.transition(env_id, models.CLEANUP_FAILED, AGENT,
+                       reason="still owned: " + ", ".join(remaining))
+    else:
+        reg.transition(env_id, models.ESCALATED, AGENT, reason="no owned resources remain")
+
+
+def _compensate(reg, cloud, env):
+    """Delete verified resources in reverse step order, stopping at the first that stays."""
+    env_id = env["env_id"]
+    statuses = {r["step"]: r["status"] for r in reg.resources(env_id)}
+    for step in reversed(models.STEPS):
+        # Never created, already gone, foreign or mismatched: never delete.
+        if statuses.get(step) != models.PRESENT:
+            continue
+        last = _last_attempt(reg, env_id, step, "delete")
+        if last is not None and last["outcome"] == models.PRESENT:
+            return  # an earlier delete failed; only cleanup_orphan retries it
+        if last is not None and last["outcome"] is None:
+            attempt = last["attempt"]
+        else:
+            attempt = reg.next_attempt(env_id, step, "delete")
+        if run_delete(reg, cloud, env, step, attempt, AGENT) != models.ABSENT:
+            return
+
+
+def _cleanup_orphan(reg, cloud, decision):
+    env_id = decision["env_id"]
+    step, _, attempt = decision["target"].partition("/")
+    attempt = int(attempt)
+    row = next((a for a in reg.attempts(env_id)
+                if (a["step"], a["op"], a["attempt"]) == (step, "delete", attempt)), None)
+    if row is None or row["outcome"] is None:
+        run_delete(reg, cloud, reg.get_environment(env_id), step, attempt, AGENT)
+
+
+def run_delete(reg, cloud, env, step, attempt, actor):
+    """Delete only a resource that matches exactly what we created; record what remains."""
+    env_id = env["env_id"]
+    expected = _expected(env, step)
+    reg.record_intent(env_id, step, "delete", attempt, actor)
+    error = None
+    if cloud.observe(*expected) == models.PRESENT:
+        try:
+            getattr(cloud, f"delete_{step}")(expected[0], env_id, attempt)
+        except CloudError as e:
+            error = e.error_class
+    outcome = cloud.observe(*expected)
+    if outcome != models.PRESENT:
+        error = None
+    reg.record_outcome(env_id, step, "delete", attempt, outcome, error, actor)
+    return outcome
+
+
 def run_create(reg, cloud, env, step, attempt, actor=ACTOR):
     """Record intent, call the cloud only if nothing is there, record what the inventory shows."""
     env_id = env["env_id"]
     name = models.resource_name(env_id, step)
-    expected = (name, env_id, step, models.resource_kind(step, env["tier"]),
-                models.resource_parent(step, env["tier"], env["region"]))
+    expected = _expected(env, step)
 
     reg.record_intent(env_id, step, "create", attempt, actor)
     error = None
@@ -139,8 +225,15 @@ def _call_create(cloud, env, step, name, attempt):
         getattr(cloud, f"create_{step}")(name, env["env_id"], attempt)
 
 
-def _last_attempt(reg, env_id, step):
-    rows = [a for a in reg.attempts(env_id) if a["step"] == step and a["op"] == "create"]
+def _expected(env, step):
+    """The observe() arguments describing exactly the resource this env should own."""
+    return (models.resource_name(env["env_id"], step), env["env_id"], step,
+            models.resource_kind(step, env["tier"]),
+            models.resource_parent(step, env["tier"], env["region"]))
+
+
+def _last_attempt(reg, env_id, step, op="create"):
+    rows = [a for a in reg.attempts(env_id) if a["step"] == step and a["op"] == op]
     return rows[-1] if rows else None
 
 

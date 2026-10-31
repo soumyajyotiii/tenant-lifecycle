@@ -290,8 +290,11 @@ class Registry:
                          "rule": rule})
         return self.get_decision(decision_id)
 
-    def complete_action(self, decision_id, actor="agent"):
-        """Mark an approved action as finished. Returns False if already marked."""
+    def complete_action(self, decision_id, outcome, actor="agent"):
+        """Mark an approved action as finished, with what it actually achieved.
+
+        Returns False if already marked.
+        """
         _check_actor(actor)
         decision = self.get_decision(decision_id)
         if decision is None or not decision["allowed"]:
@@ -300,8 +303,38 @@ class Registry:
             return False
         with self._tx():
             self._audit(decision["env_id"], actor, "action_completed", decision_id,
-                        {"action": decision["action"], "target": decision["target"]})
+                        {"action": decision["action"], "target": decision["target"],
+                         "outcome": outcome})
         return True
+
+    def completion(self, decision_id):
+        """The action_completed audit details for a decision, or None."""
+        decision = self.get_decision(decision_id)
+        if decision is None:
+            return None
+        row = self.conn.execute(
+            "SELECT details FROM audit WHERE env_id = ? AND kind = 'action_completed' AND ref = ?",
+            (decision["env_id"], decision_id),
+        ).fetchone()
+        return json.loads(row["details"]) if row else None
+
+    def events_after(self, decision_id):
+        """Audit events of the decision's environment recorded after the decision."""
+        decision = self.get_decision(decision_id)
+        return self.conn.execute(
+            "SELECT * FROM audit WHERE env_id = ? AND seq > ("
+            "  SELECT seq FROM audit WHERE env_id = ? AND kind = 'policy_decision' AND ref = ?)"
+            " ORDER BY seq",
+            (decision["env_id"], decision["env_id"], decision_id),
+        ).fetchall()
+
+    def latest_intent(self, env_id):
+        """The ref of the most recent op_intent, such as 'dns/delete/2', or None."""
+        row = self.conn.execute(
+            "SELECT ref FROM audit WHERE env_id = ? AND kind = 'op_intent'"
+            " ORDER BY seq DESC LIMIT 1", (env_id,)
+        ).fetchone()
+        return row["ref"] if row else None
 
     def get_decision(self, decision_id):
         return self.conn.execute(

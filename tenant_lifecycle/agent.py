@@ -6,20 +6,26 @@ actions run through the `execute` callable supplied by the caller, so this
 module never has access to the cloud.
 """
 
+import json
+
 from tenant_lifecycle import models, policy
 
 
-def propose(reg, env):
-    """Return (action, target) for one environment, or None."""
-    env_id = env["env_id"]
-    if env["state"] == models.STEP_FAILED:
+def candidates(reg, env):
+    """Actions worth proposing for one environment, most preferred first."""
+    env_id, state = env["env_id"], env["state"]
+    if state == models.STEP_FAILED:
         step, last = policy.failed_step(reg, env_id)
-        if last is not None:
-            return "retry_step", f"{step}/{last['attempt'] + 1}"
+        out = [("retry_step", f"{step}/{last['attempt'] + 1}")] if last is not None else []
+        return out + [("escalate", policy.escalate_target(reg, env_id))]
+    if state == models.CLEANUP_FAILED:
+        step, last = policy.failed_deletion(reg, env_id)
+        out = [("cleanup_orphan", f"{step}/{last['attempt'] + 1}")] if step is not None else []
+        return out + [("escalate", policy.escalate_target(reg, env_id))]
     # Only resume environments the agent already owns; provision resumes its own.
-    if env["state"] == models.PROVISIONING and reg.has_decisions(env_id):
-        return "resume", _resume_target(reg, env_id)
-    return None
+    if state == models.PROVISIONING and reg.has_decisions(env_id):
+        return [("resume", _resume_target(reg, env_id))]
+    return []
 
 
 def run(reg, execute):
@@ -31,20 +37,27 @@ def run(reg, execute):
 
 
 def report(reg):
-    return [{"env_id": d["env_id"], "request_id": d["request_id"],
-             "decision_id": d["decision_id"], "action": d["action"], "target": d["target"],
-             "allowed": bool(d["allowed"]), "rule": d["rule"],
-             "completed": bool(d["completed"])}
-            for d in reg.decisions()]
+    """One line per decision: what was proposed, the evidence, the rule, what happened."""
+    rows = []
+    for d in reg.decisions():
+        completion = reg.completion(d["decision_id"])
+        rows.append({"env_id": d["env_id"], "request_id": d["request_id"],
+                     "decision_id": d["decision_id"], "action": d["action"],
+                     "target": d["target"], "allowed": bool(d["allowed"]), "rule": d["rule"],
+                     "evidence": json.loads(d["inputs"]),
+                     "executed": completion is not None,
+                     "outcome": completion["outcome"] if completion else None})
+    return rows
 
 
 def _drive(reg, execute, env_id):
     while True:
-        proposal = propose(reg, reg.get_environment(env_id))
-        if proposal is None:
-            return
-        decision = policy.decide(reg, env_id, *proposal)
-        if not decision["allowed"]:
+        decision = None
+        for action, target in candidates(reg, reg.get_environment(env_id)):
+            decision = policy.decide(reg, env_id, action, target)
+            if decision["allowed"]:
+                break
+        else:
             return
         # Every executed action changes the next proposal. Repeating one means
         # no progress, so stop loudly instead of looping.

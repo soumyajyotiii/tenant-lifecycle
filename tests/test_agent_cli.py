@@ -51,12 +51,14 @@ def committed_writes(snap):
 
 
 class AgentCliTestCase(unittest.TestCase):
+    FAULT_RECORDS = FAULTS
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.requests = self.path("requests.jsonl")
         self.faults = self.path("faults.jsonl")
         write_jsonl(self.requests, REQUESTS)
-        write_jsonl(self.faults, FAULTS)
+        write_jsonl(self.faults, self.FAULT_RECORDS)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -99,19 +101,21 @@ class AgentCliTestCase(unittest.TestCase):
 
 
 class AgentCommandTest(AgentCliTestCase):
-    def test_agent_resolves_retryable_failures_and_reports_decisions(self):
+    def test_agent_retries_escalates_and_reports_decisions(self):
         state = self.provisioned("a")
         result = self.agent(state)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {"active": 2, "step_failed": 2})
+        self.assertEqual(json.loads(result.stdout), {"active": 2, "escalated": 2})
         rows = [json.loads(line) for line in self.report(state).splitlines()]
         self.assertEqual([(r["request_id"], r["action"], r["target"], r["rule"]) for r in rows],
                          [("r1", "retry_step", "secret/2", "retry_allowed"),
                           ("r1", "resume", "secret/2", "resume_allowed"),
                           ("r2", "retry_step", "database/2", "quota_not_retryable"),
+                          ("r2", "escalate", "database/create/1", "escalate_allowed"),
                           ("r3", "retry_step", "dns/2", "retry_allowed"),
                           ("r3", "retry_step", "dns/3", "retry_allowed"),
                           ("r3", "retry_step", "dns/4", "retry_budget_exhausted"),
+                          ("r3", "escalate", "dns/create/3", "escalate_allowed"),
                           ("r4", "retry_step", "namespace/2", "retry_allowed"),
                           ("r4", "resume", "namespace/2", "resume_allowed"),
                           ("r4", "retry_step", "app/2", "retry_allowed"),
@@ -144,6 +148,25 @@ class AgentCommandTest(AgentCliTestCase):
         result = self.agent(self.path("empty"))
         self.assertEqual(result.returncode, 2)
         self.assertIn("run provision first", result.stderr)
+
+
+def delete_fault(request_id, step, kind, attempt=1):
+    return dict(fault(request_id, step, kind, attempt), op="delete")
+
+
+# Escalation with failed deletes: r2 recovers within the cleanup budget,
+# r4 exhausts it and must stay cleanup_failed with its resource reported.
+COMPENSATION_FAULTS = [
+    fault("r1", "secret", "timeout"),
+    fault("r2", "dns", "quota"),
+    delete_fault("r2", "secret", "timeout"),
+    delete_fault("r2", "secret", "duplicate", attempt=2),
+    fault("r3", "app", "timeout"),
+    fault("r3", "app", "timeout", attempt=2),
+    fault("r3", "app", "timeout", attempt=3),
+    delete_fault("r3", "database", "timeout_after_success"),
+    fault("r4", "database", "quota"),
+] + [delete_fault("r4", "namespace", "timeout", attempt=n) for n in (1, 2, 3)]
 
 
 class AgentCrashRecoveryTest(AgentCliTestCase):
@@ -192,6 +215,28 @@ class AgentCrashRecoveryTest(AgentCliTestCase):
                 self.assertEqual(self.agent(state).returncode, 0)
                 self.assertEqual(self.snapshot(state), baseline)
                 shutil.rmtree(state)
+
+
+class CompensationCrashRecoveryTest(AgentCrashRecoveryTest):
+    """The same crash sweeps, over escalation, failed deletes and cleanup_orphan."""
+    FAULT_RECORDS = COMPENSATION_FAULTS
+
+    def test_final_states_and_no_false_cleanup(self):
+        state = self.provisioned("final")
+        self.assertEqual(self.agent(state).returncode, 0)
+        conn = sqlite3.connect(os.path.join(state, "registry.db"))
+        states = dict(conn.execute("SELECT request_id, state FROM environments").fetchall())
+        conn.close()
+        self.assertEqual(states, {"r1": "active", "r2": "escalated", "r3": "escalated",
+                                  "r4": "cleanup_failed"})
+        conn = sqlite3.connect(os.path.join(state, "inventory.db"))
+        owners = {r[0] for r in conn.execute("SELECT owner_env_id FROM inventory")}
+        conn.close()
+        rows = [json.loads(line) for line in self.report(state).splitlines()]
+        escalated_envs = {r["env_id"] for r in rows
+                          if r["outcome"] and r["outcome"]["env_state"] == "escalated"}
+        self.assertTrue(escalated_envs)
+        self.assertFalse(escalated_envs & owners)
 
 
 if __name__ == "__main__":

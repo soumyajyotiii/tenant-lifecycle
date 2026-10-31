@@ -236,6 +236,11 @@ class Cloud:
     def inventory(self):
         return self.conn.execute("SELECT * FROM inventory ORDER BY name").fetchall()
 
+    def owned_by(self, owner_env_id):
+        """Names of every resource this owner still has, whatever its kind or step."""
+        return [r["name"] for r in self.conn.execute(
+            "SELECT name FROM inventory WHERE owner_env_id = ? ORDER BY name", (owner_env_id,))]
+
     def log(self):
         return self.conn.execute("SELECT * FROM cloud_log ORDER BY seq").fetchall()
 

@@ -96,9 +96,11 @@ class RetryAndResumeTest(AgentTestCase):
         with mock.patch.object(self.cloud, "create", wraps=self.cloud.create) as spy:
             self.run_agent()
         self.assertEqual(spy.call_count, 0)
-        self.assertEqual(self.state("r1"), models.STEP_FAILED)
+        self.assertEqual(self.state("r1"), models.ESCALATED)
         self.assertEqual(self.decisions("r1"),
-                         [("retry_step", "database/2", False, "quota_not_retryable")])
+                         [("retry_step", "database/2", False, "quota_not_retryable"),
+                          ("escalate", "database/create/1", True, "escalate_allowed")])
+        self.assertEqual(self.cloud.owned_by(models.env_id_for("r1")), [])
 
     def test_retries_stop_after_two_with_three_attempts_in_total(self):
         self.provision([request("r1")],
@@ -107,18 +109,21 @@ class RetryAndResumeTest(AgentTestCase):
             self.run_agent()
         self.assertEqual(spy.call_count, 2)
         self.assertEqual([a[0] for a in self.attempts("r1", "dns")], [1, 2, 3])
-        self.assertEqual(self.decisions("r1")[-1],
-                         ("retry_step", "dns/4", False, "retry_budget_exhausted"))
-        self.assertEqual(self.state("r1"), models.STEP_FAILED)
+        self.assertEqual(self.decisions("r1")[-2:],
+                         [("retry_step", "dns/4", False, "retry_budget_exhausted"),
+                          ("escalate", "dns/create/3", True, "escalate_allowed")])
+        self.assertEqual(self.state("r1"), models.ESCALATED)
 
     def test_foreign_owner_is_not_retried(self):
         env_id = models.env_id_for("r1")
-        self.cloud.create(models.resource_name(env_id, "dns"), "dns",
-                          models.env_id_for("other"), "dns", None, 1)
+        name = models.resource_name(env_id, "dns")
+        self.cloud.create(name, "dns", models.env_id_for("other"), "dns", None, 1)
         self.provision([request("r1")])
         self.run_agent()
         self.assertEqual(self.decisions("r1"),
-                         [("retry_step", "dns/2", False, "outcome_not_retryable")])
+                         [("retry_step", "dns/2", False, "outcome_not_retryable"),
+                          ("escalate", "dns/create/1", True, "escalate_allowed")])
+        self.assertEqual(self.cloud.get(name)["owner_env_id"], models.env_id_for("other"))
 
     def test_active_environments_are_left_alone(self):
         self.provision([request("r1")])
@@ -225,13 +230,15 @@ class AgentReplayTest(AgentTestCase):
     def test_report_lists_every_decision_in_order(self):
         report = agent.report(self.reg)
         self.assertEqual([(r["request_id"], r["action"], r["target"], r["allowed"],
-                           r["completed"]) for r in report],
+                           r["executed"]) for r in report],
                          [("r1", "retry_step", "secret/2", True, True),
                           ("r1", "resume", "secret/2", True, True),
                           ("r2", "retry_step", "database/2", False, False),
+                          ("r2", "escalate", "database/create/1", True, True),
                           ("r3", "retry_step", "dns/2", True, True),
                           ("r3", "retry_step", "dns/3", True, True),
-                          ("r3", "retry_step", "dns/4", False, False)])
+                          ("r3", "retry_step", "dns/4", False, False),
+                          ("r3", "escalate", "dns/create/3", True, True)])
 
 
 if __name__ == "__main__":

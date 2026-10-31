@@ -115,12 +115,12 @@ class AllowlistTest(PolicyTestCase):
                 self.assertEqual(self.check(env_id, action, "dns/2"),
                                  (False, "action_not_allowed"))
 
-    def test_cleanup_and_escalate_are_allowlisted_but_not_enabled_yet(self):
+    def test_cleanup_and_escalate_are_judged_by_their_own_rules(self):
         env_id = self.failed("dns", "timeout")
-        for action in ("cleanup_orphan", "escalate"):
-            with self.subTest(action=action):
-                self.assertEqual(self.check(env_id, action, "dns"),
-                                 (False, "action_not_implemented"))
+        self.assertEqual(self.check(env_id, "cleanup_orphan", "dns/2"),
+                         (False, "env_not_cleanup_failed"))
+        self.assertEqual(self.check(env_id, "escalate", "dns/create/1"),
+                         (False, "retry_still_possible"))
 
 
 class DurableDecisionTest(PolicyTestCase):
