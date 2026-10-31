@@ -31,12 +31,12 @@ def transaction(conn):
 def _count_write():
     global _committed
     _committed += 1
-    limit = _crash_limit()
+    limit = crash_limit()
     if limit is not None and _committed >= limit:
         os._exit(CRASH_EXIT_CODE)
 
 
-def _crash_limit():
+def crash_limit():
     raw = os.environ.get("CRASH_AFTER")
     if raw is None or raw == "":
         return None

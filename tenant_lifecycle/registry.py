@@ -259,6 +259,11 @@ class Registry:
             "SELECT * FROM environments WHERE env_id = ?", (env_id,)
         ).fetchone()
 
+    def state_counts(self):
+        return dict(self.conn.execute(
+            "SELECT state, COUNT(*) FROM environments GROUP BY state ORDER BY state"
+        ).fetchall())
+
     def open_attempts(self, env_id):
         return self.conn.execute(
             "SELECT * FROM step_attempts WHERE env_id = ? AND outcome IS NULL"

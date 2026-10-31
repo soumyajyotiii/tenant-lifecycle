@@ -140,13 +140,13 @@ class CrashLimitParsingTest(unittest.TestCase):
         for raw in ("0", "-1", "abc", "1.5"):
             with self.subTest(raw=raw), mock.patch.dict(os.environ, {"CRASH_AFTER": raw}):
                 with self.assertRaises(ValueError):
-                    writes._crash_limit()
+                    writes.crash_limit()
 
     def test_unset_or_empty_means_no_limit(self):
         with mock.patch.dict(os.environ, {"CRASH_AFTER": ""}):
-            self.assertIsNone(writes._crash_limit())
+            self.assertIsNone(writes.crash_limit())
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(writes._crash_limit())
+            self.assertIsNone(writes.crash_limit())
 
 
 if __name__ == "__main__":
