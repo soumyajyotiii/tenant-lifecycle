@@ -82,3 +82,6 @@ def resource_parent(step, tier, region):
 def payload_hash(payload):
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+RESOURCE_KINDS = frozenset(resource_kind(step, tier) for step in STEPS for tier in TIERS)

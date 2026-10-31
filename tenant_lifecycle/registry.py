@@ -2,9 +2,8 @@
 
 import json
 import sqlite3
-from contextlib import contextmanager
 
-from tenant_lifecycle import models
+from tenant_lifecycle import models, writes
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS environments (
@@ -77,16 +76,8 @@ class Registry:
     def close(self):
         self.conn.close()
 
-    @contextmanager
     def _tx(self):
-        # Every registry write goes through here, so one place can count writes.
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            yield
-        except BaseException:
-            self.conn.execute("ROLLBACK")
-            raise
-        self.conn.execute("COMMIT")
+        return writes.transaction(self.conn)
 
     def _audit(self, env_id, actor, kind, ref, details):
         (seq,) = self.conn.execute(
@@ -154,6 +145,13 @@ class Registry:
         from_state = row["state"]
         if not models.is_legal_transition(from_state, to_state):
             raise IllegalTransition(f"{env_id}: {from_state} -> {to_state}")
+        # An open attempt may have changed the cloud. Its outcome must be
+        # reconciled and recorded before the lifecycle moves on.
+        unresolved = self.open_attempts(env_id)
+        if unresolved:
+            a = unresolved[0]
+            raise RegistryConflict(
+                f"{env_id}: {_ref(a['step'], a['op'], a['attempt'])} is unresolved")
         with self._tx():
             cur = self.conn.execute(
                 "UPDATE environments SET state = ? WHERE env_id = ? AND state = ?",

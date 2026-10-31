@@ -80,6 +80,26 @@ class TransitionTest(RegistryTestCase):
             self.reg.transition(env_id, models.PROVISIONING, "robot")
         self.assertEqual(snapshot(self.reg), before)
 
+    def test_transition_waits_for_unresolved_attempt(self):
+        env_id = self.provisioning_env()
+        self.reg.record_intent(env_id, "namespace", "create", 1, "workflow")
+        before = snapshot(self.reg)
+        with self.assertRaisesRegex(RegistryConflict, "namespace/create/1 is unresolved"):
+            self.reg.transition(env_id, models.STEP_FAILED, "workflow")
+        self.assertEqual(snapshot(self.reg), before)
+
+        self.reg.record_outcome(env_id, "namespace", "create", 1, models.ABSENT, "timeout",
+                                "workflow")
+        self.reg.transition(env_id, models.STEP_FAILED, "workflow")
+        self.assertEqual(self.reg.get_environment(env_id)["state"], models.STEP_FAILED)
+
+    def test_unresolved_attempt_of_another_environment_does_not_block(self):
+        a = self.provisioning_env()
+        b = self.new_env("req-b", 2)
+        self.reg.record_intent(a, "namespace", "create", 1, "workflow")
+        self.reg.transition(b, models.PROVISIONING, "workflow")
+        self.assertEqual(self.reg.get_environment(b)["state"], models.PROVISIONING)
+
     def test_unknown_environment_is_rejected(self):
         with self.assertRaises(KeyError):
             self.reg.transition("env-missing", models.PROVISIONING, "workflow")
